@@ -63,7 +63,24 @@ defmodule ChatAppWeb.RoomLive do
 
   @impl true
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
-    {:noreply, assign(socket, :online_users, ChatAppWeb.Presence.list(@topic))}
+    online_users = ChatAppWeb.Presence.list(@topic)
+
+    online_names =
+      online_users
+      |> Enum.flat_map(fn {_key, %{metas: metas}} -> Enum.map(metas, & &1[:user]) end)
+      |> MapSet.new()
+
+    updated_typing =
+      socket.assigns.typing_users
+      |> Enum.filter(fn {user, _ref} -> MapSet.member?(online_names, user) end)
+      |> Map.new()
+
+    socket =
+      socket
+      |> assign(:online_users, online_users)
+      |> assign(:typing_users, updated_typing)
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -72,7 +89,8 @@ defmodule ChatAppWeb.RoomLive do
       Process.cancel_timer(old_ref)
     end
 
-    timer_ref = Process.send_after(self(), {:stop_typing, username}, 2000)
+    ref = make_ref()
+    timer_ref = Process.send_after(self(), {:stop_typing, username, ref}, 2000)
     updated_typing = Map.put(socket.assigns.typing_users, username, timer_ref)
 
     {:noreply, assign(socket, :typing_users, updated_typing)}
@@ -88,6 +106,25 @@ defmodule ChatAppWeb.RoomLive do
     {:noreply, assign(socket, :typing_users, updated_typing)}
   end
 
+  @impl true
+  def handle_info({:stop_typing, username, ref}, socket) do
+    case Map.get(socket.assigns.typing_users, username) do
+      ^ref ->
+        updated_typing = Map.delete(socket.assigns.typing_users, username)
+        {:noreply, assign(socket, :typing_users, updated_typing)}
+
+      _stale_ref ->
+        {:noreply, socket}
+    end
+  end
+
+  defp extract_online_users(online_users_map) do
+    online_users_map
+    |> Enum.flat_map(fn {_key, %{metas: metas}} -> Enum.map(metas, & &1[:user]) end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
   defp format_typing_users(typing_map, current_user) do
     users = Map.keys(typing_map) |> Enum.reject(&(&1 == current_user))
 
@@ -99,15 +136,25 @@ defmodule ChatAppWeb.RoomLive do
     end
   end
 
+  defp user_initial(user) do
+    user = if is_binary(user), do: String.trim(user), else: ""
+    if user == "", do: "A", else: String.first(user) |> String.upcase()
+  end
+
   @impl true
   def render(assigns) do
     current_user = assigns.form[:user].value || "User"
     typing_text = format_typing_users(assigns.typing_users, current_user)
-    assigns = assign(assigns, :typing_text, typing_text)
+    online_list = extract_online_users(assigns.online_users)
+
+    assigns =
+      assigns
+      |> assign(:typing_text, typing_text)
+      |> assign(:online_list, online_list)
 
     ~H"""
     <Layouts.app flash={@flash}>
-      <div class="max-w-4xl mx-auto my-3 p-4 sm:p-6 bg-slate-900/95 text-slate-100 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-800 flex flex-col h-[calc(100vh-5rem)] sm:h-[82vh] min-h-[500px]">
+      <div class="max-w-4xl mx-auto my-3 p-4 sm:p-6 bg-slate-900/95 text-slate-100 backdrop-blur-md rounded-2xl shadow-2xl border border-slate-800 flex flex-col h-[calc(100dvh-4rem)] sm:h-[82vh] min-h-[500px]">
         <!-- Header -->
         <div class="flex items-center justify-between pb-4 mb-4 border-b border-slate-800/80 flex-none">
           <div class="flex items-center gap-3">
@@ -125,11 +172,23 @@ defmodule ChatAppWeb.RoomLive do
             </div>
           </div>
 
-          <!-- Presence Pill -->
-          <div class="flex items-center gap-2 px-3 py-1.5 bg-slate-800/80 border border-slate-700/60 rounded-full text-xs text-slate-300 shadow-inner">
-            <.icon name="hero-user-group" class="w-4 h-4 text-emerald-400" />
-            <span class="font-semibold text-white">{map_size(@online_users)}</span>
-            <span class="text-slate-400">online</span>
+          <!-- Presence Pill with Hover Tooltip -->
+          <div class="relative group cursor-pointer">
+            <div class="flex items-center gap-2 px-3 py-1.5 bg-slate-800/80 border border-slate-700/60 rounded-full text-xs text-slate-300 shadow-inner hover:border-slate-600/80 transition-all">
+              <.icon name="hero-user-group" class="w-4 h-4 text-emerald-400" />
+              <span class="font-semibold text-white">{length(@online_list)}</span>
+              <span class="text-slate-400">online</span>
+            </div>
+
+            <div :if={@online_list != []} class="absolute right-0 top-full mt-1.5 hidden group-hover:block z-50 bg-slate-800 border border-slate-700/90 rounded-xl p-3 shadow-2xl text-xs text-slate-200 min-w-36 flex flex-col gap-1.5 whitespace-nowrap">
+              <div class="text-[10px] uppercase tracking-wider text-slate-400 font-bold border-b border-slate-700/60 pb-1">
+                Active Users
+              </div>
+              <div :for={name <- @online_list} class="flex items-center gap-2 text-slate-200">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span class="font-medium">{name}</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -137,6 +196,7 @@ defmodule ChatAppWeb.RoomLive do
         <div
           id="messages"
           phx-update="stream"
+          phx-hook="ScrollToBottom"
           class="flex-1 overflow-y-auto space-y-3 pr-2 min-h-0 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent"
         >
           <div
@@ -147,7 +207,7 @@ defmodule ChatAppWeb.RoomLive do
             <div class="flex items-center justify-between text-xs text-slate-400">
               <span class="font-semibold text-indigo-400 flex items-center gap-1.5">
                 <span class="w-6 h-6 rounded-full bg-indigo-950 border border-indigo-700/50 flex items-center justify-center text-[10px] text-indigo-300 font-bold uppercase">
-                  {String.first(message.user || "A")}
+                  {user_initial(message.user)}
                 </span>
                 {message.user}
               </span>
@@ -180,6 +240,7 @@ defmodule ChatAppWeb.RoomLive do
               name="user"
               value={@form[:user].value}
               phx-change="update_user"
+              phx-debounce="500"
               placeholder="Username"
               required
               class="w-full px-3.5 py-2 bg-slate-800/90 border border-slate-700/80 rounded-xl text-slate-100 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
