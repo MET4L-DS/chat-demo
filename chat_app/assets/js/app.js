@@ -41,6 +41,26 @@ const Hooks = {
         this.el.scrollTop = this.el.scrollHeight
       }, 50)
     }
+  },
+  LocalTime: {
+    mounted() {
+      this.formatTime()
+    },
+    updated() {
+      this.formatTime()
+    },
+    formatTime() {
+      const utcStr = this.el.getAttribute("datetime")
+      if (!utcStr) return
+      const date = new Date(utcStr.endsWith("Z") ? utcStr : utcStr + "Z")
+      if (!isNaN(date.getTime())) {
+        this.el.textContent = new Intl.DateTimeFormat(navigator.language, {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit"
+        }).format(date)
+      }
+    }
   }
 }
 

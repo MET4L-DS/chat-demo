@@ -211,9 +211,9 @@ defmodule ChatAppWeb.RoomLive do
                 </span>
                 {message.user}
               </span>
-              <span class="text-[11px] opacity-75">
-                {Calendar.strftime(message.inserted_at, "%H:%M:%S")}
-              </span>
+              <time id={"time-#{message.id}"} phx-hook="LocalTime" datetime={to_string(message.inserted_at)} class="text-[11px] opacity-75">
+                {to_string(message.inserted_at)}
+              </time>
             </div>
             <p class="text-slate-200 text-sm leading-relaxed pl-7 break-words">
               {message.text}

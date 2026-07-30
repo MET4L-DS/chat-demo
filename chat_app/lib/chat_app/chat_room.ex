@@ -52,7 +52,7 @@ defmodule ChatApp.ChatRoom do
       id: Integer.to_string(System.unique_integer([:positive])),
       user: user,
       text: text,
-      inserted_at: NaiveDateTime.utc_now() |> NaiveDateTime.truncate(:second)
+      inserted_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     }
 
     Phoenix.PubSub.broadcast(@pubsub, @topic, {:new_message, message})
